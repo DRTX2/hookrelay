@@ -6,6 +6,7 @@ useDefault = true
 description = "Public test vector and documentation placeholders (not real credentials)"
 regexes = [
   '''whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw''', # official Standard Webhooks spec vector
+  '''msg_p5jXN8AQM9LWM0D4loKWxJek''', # same vector
   '''change-me''',
   '''hr_\.\.\.''',
 ]
