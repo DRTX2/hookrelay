@@ -87,6 +87,7 @@ k6 run -e API=... -e KEY=... ops/load/ingest.js
 | [RUNBOOK](docs/RUNBOOK.md) | What to do when each alert fires |
 | [ROADMAP](docs/ROADMAP.md) | Prioritized backlog of pending work |
 | [CONTEXT](docs/CONTEXT.md) | Project memory: decisions, gotchas, how to resume work |
+| Atalaya | Hookrelay, Flagship and Nimbus running together: [DRTX2/atalaya](https://github.com/DRTX2/atalaya). Nimbus incidents enter through `POST /v1/inbound/nimbus/:appId` (HMAC-signed) |
 | Ecosystem | [Flagship](https://github.com/DRTX2/flagship) publishes its flag changes through Hookrelay (optional, idempotent). Details in Flagship's `docs/ECOSYSTEM.md` |
 | [AGENTS.md](AGENTS.md) | Conventions for AI coding agents (spec-driven workflow) |
 

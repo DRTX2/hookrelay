@@ -59,4 +59,5 @@ docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy:0.66.0 fs --scanners vuln
 
 ## Log
 - **2026-11-16**: v1 built (engine, dashboard, receiver). Hexagonal refactor of delivery. Added metrics, JSON logs, OTel, rate limiting, helmet, OpenAPI from zod, integration suite, k6, Grafana/Prometheus/Jaeger, CI/CodeQL/deploy workflows, Terraform for AWS, docs. Next: ROADMAP "Now".
+- **2026-11-17**: `POST /v1/inbound/nimbus/:appId` (HMAC-signed, idempotent) + shared `ingestMessage()`; 10 integration tests. Part of Atalaya (github.com/DRTX2/atalaya).
 - **2026-11-16 (later)**: DLQ endpoints (`GET /v1/dead-letters`, `POST /v1/dead-letters/replay`, atomic claim with SKIP LOCKED) + dashboard page. Flagship now publishes `flag.*` events here (optional).
