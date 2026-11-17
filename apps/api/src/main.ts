@@ -15,7 +15,7 @@ const pool = createPool();
 await migrate(pool);
 await pool.end();
 
-const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: createLogger('api') });
+const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: createLogger('api'), rawBody: true }); // rawBody: inbound webhook signatures
 app.enableShutdownHooks();
 app.set('trust proxy', 1); // behind the ALB: real client IP and protocol
 app.use(helmet({ contentSecurityPolicy: false })); // CSP off only because /docs loads Scalar from a CDN

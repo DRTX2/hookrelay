@@ -3,6 +3,7 @@
  * Redis, with an in-process webhook receiver. Run with `pnpm test:int` (CI: services in ci.yml).
  */
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -40,6 +41,11 @@ async function eventually<T>(fn: () => Promise<T>, ok: (v: T) => boolean, timeou
 }
 
 let apiKey = '';
+const pgOne = async (sql: string) => {
+  const c = new pg.Client({ connectionString: DATABASE_URL });
+  await c.connect();
+  try { return (await c.query(sql)).rows[0]; } finally { await c.end(); }
+};
 const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
   const res = await fetch(API + path, {
     method,
@@ -78,7 +84,7 @@ beforeAll(async () => {
   // 3. Real processes from dist/
   const env = {
     ...process.env, DATABASE_URL, REDIS_URL, ADMIN_TOKEN: ADMIN, PORT: String(PORT), METRICS_PORT: '9499',
-    ALLOW_PRIVATE_TARGETS: 'true', RETRY_SCHEDULE: '1,1', ENDPOINT_DISABLE_AFTER: '3', RATE_LIMIT_PER_MINUTE: '40', LOG_FORMAT: 'json',
+    ALLOW_PRIVATE_TARGETS: 'true', NIMBUS_WEBHOOK_SECRET: 'atalaya-shared-secret-for-tests', RETRY_SCHEDULE: '1,1', ENDPOINT_DISABLE_AFTER: '3', RATE_LIMIT_PER_MINUTE: '40', LOG_FORMAT: 'json',
   };
   const dist = join(import.meta.dirname, '../../dist');
   for (const entry of ['main.js', 'worker.js']) {
@@ -173,6 +179,25 @@ describe('Hookrelay API (black box)', () => {
     await sleep(1500);
     const successes = received.filter((r) => r.path === '/outage').length - before;
     expect(successes).toBe(3); // no duplicate sends
+  });
+
+  it('accepts HMAC-signed Nimbus incidents and delivers them as webhooks, once (Atalaya integration)', async () => {
+    const me = await pgOne(`SELECT id FROM apps WHERE name='acme'`);
+    await call('POST', '/v1/endpoints', { url: `${receiverUrl}/oncall`, eventTypes: ['incident.opened'] });
+    const post = async (body: object, secret = 'atalaya-shared-secret-for-tests') => {
+      const raw = JSON.stringify(body);
+      const t = Math.floor(Date.now() / 1000);
+      const sig = createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex');
+      const res = await fetch(`${API}/v1/inbound/nimbus/${me.id}`, { method: 'POST', headers: { 'content-type': 'application/json', 'nimbus-signature': `t=${t},v1=${sig}` }, body: raw });
+      return { status: res.status, body: await res.json() };
+    };
+    const incident = { incidentId: 'inc-9', event: 'opened', pipelineName: 'Orders', summary: 'Consumer stalled' };
+    expect((await post(incident, 'not-the-secret-xxxxxxxx')).status).toBe(401);
+    const first = await post(incident);
+    expect(first).toMatchObject({ status: 202, body: { fanout: 1, duplicate: false } });
+    expect((await post(incident)).body).toMatchObject({ id: first.body.id, duplicate: true });
+    const hit = await eventually(async () => received.find((r) => r.path === '/oncall'), Boolean);
+    expect(JSON.parse(hit!.body)).toMatchObject({ type: 'incident.opened', data: { incidentId: 'inc-9', pipelineName: 'Orders' } });
   });
 
   it('exposes Prometheus metrics from the worker', async () => {

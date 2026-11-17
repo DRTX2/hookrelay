@@ -2,12 +2,12 @@ import {
   Body, Controller, Get, Headers, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { PG, tx, type Db } from '../db/db.js';
+import { PG, type Db } from '../db/db.js';
 import { ApiKeyGuard, Tenant, Zod } from '../common/http.js';
 import { RateLimitGuard } from '../common/rate-limit.guard.js';
-import { metrics } from '../common/metrics.js';
 import { CreateMessage, IdempotencyKey, ListMessagesQuery } from '../contracts.js';
 import { DeliveryQueue } from '../delivery/infrastructure/delivery.queue.js';
+import { ingestMessage } from './ingest.js';
 
 @Controller('v1/messages')
 @UseGuards(ApiKeyGuard)
@@ -27,39 +27,9 @@ export class MessagesController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const idemKey = new Zod(IdempotencyKey).transform(rawIdemKey);
-    const result = await tx(this.db, async (c) => {
-      const inserted = await c.query(
-        `INSERT INTO messages (app_id, event_type, payload, idempotency_key) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (app_id, idempotency_key) DO NOTHING RETURNING id, created_at`,
-        [appId, body.eventType, body.payload, idemKey ?? null],
-      );
-      if (!inserted.rows[0]) {
-        const existing = await c.query(
-          `SELECT m.id, count(d.*)::int AS n FROM messages m LEFT JOIN deliveries d ON d.message_id = m.id
-            WHERE m.app_id=$1 AND m.idempotency_key=$2 GROUP BY m.id`,
-          [appId, idemKey],
-        );
-        return { id: existing.rows[0].id as string, deliveryIds: [] as string[], fanout: existing.rows[0].n as number, duplicate: true };
-      }
-      const id = inserted.rows[0].id as string;
-      const deliveries = await c.query(
-        `INSERT INTO deliveries (message_id, endpoint_id, next_attempt_at)
-         SELECT $1, id, now() FROM endpoints
-          WHERE app_id=$2 AND disabled_at IS NULL AND (event_types IS NULL OR $3 = ANY(event_types))
-         RETURNING id`,
-        [id, appId, body.eventType],
-      );
-      const deliveryIds = deliveries.rows.map((r) => r.id as string);
-      return { id, deliveryIds, fanout: deliveryIds.length, duplicate: false };
-    });
-
-    // After COMMIT: if this fails the rows are still 'pending' and the sweeper enqueues them.
-    if (result.deliveryIds.length) {
-      await this.queue.schedule(result.deliveryIds.map((deliveryId) => ({ deliveryId, attempt: 1 }))).catch(() => {});
-    }
-    metrics.messages.inc({ duplicate: String(result.duplicate) });
+    const result = await ingestMessage(this.db, this.queue, appId, body.eventType, body.payload, idemKey);
     res.status(result.duplicate ? 200 : 202);
-    return { id: result.id, fanout: result.fanout, duplicate: result.duplicate };
+    return result;
   }
 
   @Get()

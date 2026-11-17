@@ -15,6 +15,7 @@ import { PgDeliveryStore } from './delivery/infrastructure/pg-delivery-store.js'
 import { Sweeper } from './delivery/infrastructure/sweeper.js';
 import { EndpointsController } from './endpoints/endpoints.controller.js';
 import { MessagesController } from './messages/messages.controller.js';
+import { InboundController } from './messages/inbound.controller.js';
 import { DeliveriesController } from './deliveries/deliveries.controller.js';
 
 @Module({
@@ -32,7 +33,7 @@ export class CoreModule {}
 
 @Module({
   imports: [CoreModule],
-  controllers: [EndpointsController, MessagesController, DeliveriesController],
+  controllers: [EndpointsController, MessagesController, InboundController, DeliveriesController],
   providers: [ApiKeyGuard, RateLimitGuard],
 })
 export class ApiModule {}

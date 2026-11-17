@@ -62,6 +62,9 @@ export const openApiDocument = {
     '/v1/dead-letters/replay': {
       post: { summary: 'Bulk replay from the DLQ (filters: endpoint, time window)', security: tenant, requestBody: body(ReplayDeadLetters), responses: { 202: ok('{ replayed: n }'), ...errors } },
     },
+    '/v1/inbound/nimbus/{appId}': {
+      post: { summary: 'Inbound Nimbus incident (HMAC-signed, no API key): becomes an incident.* message', parameters: [uuidParam('appId')], responses: { 202: ok('Accepted'), 401: ok('Bad signature'), 404: ok('Unknown app') } },
+    },
     '/v1/stats': { get: { summary: 'Success rate, latency percentiles, hourly series (24h)', security: tenant, responses: { 200: ok('Stats'), ...errors } } },
     '/v1/stream': { get: { summary: 'Server-Sent Events: live delivery attempts', security: tenant, responses: { 200: ok('text/event-stream'), ...errors } } },
     '/v1/apps': { post: { summary: 'Create a tenant; returns its API key once', security: [{ adminToken: [] }], requestBody: body(CreateApp), responses: { 201: ok('Created'), 401: ok('Bad admin token') } } },
