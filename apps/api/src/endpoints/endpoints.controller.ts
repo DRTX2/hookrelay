@@ -2,17 +2,11 @@ import {
   BadRequestException, Body, Controller, Delete, Get, HttpCode, Inject, NotFoundException,
   Param, ParseUUIDPipe, Post, UseGuards,
 } from '@nestjs/common';
-import { z } from 'zod';
 import { PG, type Db } from '../db/db.js';
 import { ApiKeyGuard, Tenant, Zod } from '../common/http.js';
-import { generateSecret } from '../delivery/signing.js';
-import { assertSafeUrl, UnsafeTargetError } from '../delivery/ssrf.js';
-
-const CreateEndpoint = z.object({
-  url: z.string().max(2048),
-  description: z.string().max(200).optional(),
-  eventTypes: z.array(z.string().regex(/^[\w.-]{1,100}$/)).max(50).optional(),
-});
+import { CreateEndpoint } from '../contracts.js';
+import { generateSecret } from '../delivery/domain/signing.js';
+import { assertSafeUrl, UnsafeTargetError } from '../delivery/infrastructure/ssrf.js';
 
 const COLUMNS = `e.id, e.url, e.description, e.event_types AS "eventTypes", e.failure_streak AS "failureStreak",
   e.disabled_at AS "disabledAt", e.disabled_reason AS "disabledReason", e.created_at AS "createdAt"`;
@@ -39,7 +33,7 @@ export class EndpointsController {
   }
 
   @Post()
-  async create(@Tenant() appId: string, @Body(new Zod(CreateEndpoint)) body: z.infer<typeof CreateEndpoint>) {
+  async create(@Tenant() appId: string, @Body(new Zod(CreateEndpoint)) body: CreateEndpoint) {
     try {
       assertSafeUrl(body.url, process.env.ALLOW_PRIVATE_TARGETS === 'true');
     } catch (e) {

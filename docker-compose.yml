@@ -11,17 +11,34 @@ services:
 
   api: &api
     build: { context: ., dockerfile: apps/api/Dockerfile }
+    image: hookrelay-api:local # the worker runs the same image, so the two can never drift
     environment: &env
+      OTEL_SERVICE_NAME: hookrelay-api
       DATABASE_URL: postgres://hookrelay:hookrelay@postgres:5432/hookrelay
       REDIS_URL: redis://redis:6379
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
       ALLOW_PRIVATE_TARGETS: "true" # demo only: lets endpoints target the receiver container
       RETRY_SCHEDULE: ${RETRY_SCHEDULE:-5,15,60,300,1800}
+      LOG_FORMAT: json
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-50}
+      # Tracing: OTEL_SDK_DISABLED=false docker compose --profile observability up
+      NODE_OPTIONS: --require @opentelemetry/auto-instrumentations-node/register
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,express,pg,ioredis,undici
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     ports: ["3000:3000"]
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
   worker:
     <<: *api
+    build: !reset null
+    pull_policy: never
     command: ["node", "dist/worker.js"]
+    environment:
+      <<: *env
+      OTEL_SERVICE_NAME: hookrelay-worker
     ports: []
     deploy: { replicas: 2 }
 
@@ -40,3 +57,22 @@ services:
     command: ["node", "server.js"]
     environment: { WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}", FAIL_RATE: "0.3" }
     ports: ["4000:4000"]
+
+  # --- docker compose --profile observability up -------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    volumes:
+      - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana:12.1.0
+    profiles: [observability]
+    environment: { GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer }
+    volumes: ["./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro"]
+    ports: ["3002:3000"]
+  jaeger:
+    image: jaegertracing/all-in-one:1.72.0
+    profiles: [observability]
+    ports: ["16686:16686", "4318:4318"]

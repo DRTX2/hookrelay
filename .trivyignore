@@ -1,0 +1,13 @@
+# Accepted risks. Each entry needs a reason; review them in docs/SECURITY.md when the context changes.
+
+# Public ALB: this is the product's public entry point (ingestion API + dashboard).
+AVD-AWS-0053
+
+# HTTP listener: redirects to HTTPS whenever certificate_arn is set (production.tfvars). It only
+# forwards plain HTTP in demo environments without a certificate.
+AVD-AWS-0054
+
+# Unrestricted egress on app tasks: delivering webhooks means calling arbitrary customer URLs.
+# Mitigated in the application by the connect-time SSRF guard (private/link-local/metadata ranges
+# blocked after DNS resolution, redirects not followed). See docs/SECURITY.md#ssrf.
+AVD-AWS-0104

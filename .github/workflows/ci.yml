@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # Sonar needs history for new-code detection
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter api lint
+      - run: pnpm --filter api typecheck
+      - run: pnpm --filter api test:cov # fails under the core coverage gate (vitest.config.ts)
+      - run: pnpm --filter api build
+      - run: pnpm --filter web build
+        env: { HOOKRELAY_API_KEY: ci-placeholder }
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: apps/api/coverage/lcov.info }
+
+  integration:
+    name: Integration (real Postgres + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: hookrelay, POSTGRES_PASSWORD: hookrelay, POSTGRES_DB: hookrelay }
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U hookrelay" --health-interval 2s --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter api test:int
+        env:
+          TEST_DATABASE_URL: postgres://hookrelay:hookrelay@localhost:5432/hookrelay_test
+          TEST_REDIS_URL: redis://localhost:6379/15
+
+  sonar:
+    name: SonarQube analysis
+    needs: quality
+    runs-on: ubuntu-latest
+    # Runs once SONAR_TOKEN is configured (SonarCloud or a self-hosted SonarQube via SONAR_HOST_URL).
+    if: ${{ vars.SONAR_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { name: coverage, path: apps/api/coverage }
+      - uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      - uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env: { SONAR_TOKEN: '${{ secrets.SONAR_TOKEN }}' }
+
+  security:
+    name: Secrets, dependencies, images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+      - name: Dependency + IaC scan (Trivy filesystem)
+        uses: aquasecurity/trivy-action@0.33.1
+        with: { scan-type: fs, scanners: 'vuln,secret,misconfig', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
+      - name: Build images
+        run: |
+          docker build -f apps/api/Dockerfile -t hookrelay-api:ci .
+          docker build -f apps/web/Dockerfile -t hookrelay-web:ci .
+      - name: Image scan (Trivy)
+        uses: aquasecurity/trivy-action@0.33.1
+        with: { image-ref: 'hookrelay-api:ci', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: infra/terraform } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.13.x }
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate

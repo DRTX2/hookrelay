@@ -2,21 +2,12 @@ import {
   Body, Controller, Get, Headers, Inject, NotFoundException, Param, ParseUUIDPipe, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { z } from 'zod';
 import { PG, tx, type Db } from '../db/db.js';
 import { ApiKeyGuard, Tenant, Zod } from '../common/http.js';
-import { DeliveryQueue } from '../delivery/delivery.queue.js';
-
-const CreateMessage = z.object({
-  eventType: z.string().regex(/^[\w.-]{1,100}$/),
-  payload: z.record(z.string(), z.unknown()),
-});
-const IdempotencyKey = z.string().min(1).max(200).optional();
-const ListQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  before: z.iso.datetime({ offset: true }).optional(),
-  eventType: z.string().max(100).optional(),
-});
+import { RateLimitGuard } from '../common/rate-limit.guard.js';
+import { metrics } from '../common/metrics.js';
+import { CreateMessage, IdempotencyKey, ListMessagesQuery } from '../contracts.js';
+import { DeliveryQueue } from '../delivery/infrastructure/delivery.queue.js';
 
 @Controller('v1/messages')
 @UseGuards(ApiKeyGuard)
@@ -28,9 +19,10 @@ export class MessagesController {
    * Same Idempotency-Key => same message, no new deliveries (safe client retries).
    */
   @Post()
+  @UseGuards(RateLimitGuard)
   async create(
     @Tenant() appId: string,
-    @Body(new Zod(CreateMessage)) body: z.infer<typeof CreateMessage>,
+    @Body(new Zod(CreateMessage)) body: CreateMessage,
     @Headers('idempotency-key') rawIdemKey: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
@@ -63,14 +55,15 @@ export class MessagesController {
 
     // After COMMIT: if this fails the rows are still 'pending' and the sweeper enqueues them.
     if (result.deliveryIds.length) {
-      await this.queue.enqueue(result.deliveryIds.map((deliveryId) => ({ deliveryId, attempt: 1 }))).catch(() => {});
+      await this.queue.schedule(result.deliveryIds.map((deliveryId) => ({ deliveryId, attempt: 1 }))).catch(() => {});
     }
+    metrics.messages.inc({ duplicate: String(result.duplicate) });
     res.status(result.duplicate ? 200 : 202);
     return { id: result.id, fanout: result.fanout, duplicate: result.duplicate };
   }
 
   @Get()
-  async list(@Tenant() appId: string, @Query(new Zod(ListQuery)) q: z.infer<typeof ListQuery>) {
+  async list(@Tenant() appId: string, @Query(new Zod(ListMessagesQuery)) q: ListMessagesQuery) {
     const { rows } = await this.db.query(
       `SELECT m.id, m.event_type AS "eventType", m.created_at AS "createdAt",
               count(d.*)::int AS fanout,

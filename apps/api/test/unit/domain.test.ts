@@ -1,8 +1,10 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { fetch } from 'undici';
 import { describe, expect, it } from 'vitest';
-import { generateSecret, sign, signedHeaders, verify } from '../src/delivery/signing.js';
-import { parseSchedule, retryDelayMs } from '../src/delivery/backoff.js';
-import { assertSafeUrl, isPrivateAddress } from '../src/delivery/ssrf.js';
-import { decide } from '../src/delivery/delivery.processor.js';
+import { generateSecret, sign, signedHeaders, verify } from '../../src/delivery/domain/signing.js';
+import { decide, parseSchedule, retryDelayMs } from '../../src/delivery/domain/retry-policy.js';
+import { assertSafeUrl, createSafeAgent, isPrivateAddress } from '../../src/delivery/infrastructure/ssrf.js';
 
 describe('signing (Standard Webhooks)', () => {
   // Official test vector from the Standard Webhooks spec repository
@@ -73,5 +75,21 @@ describe('SSRF guard', () => {
     expect(() => assertSafeUrl('http://[::1]:8080', false)).toThrow();
     expect(assertSafeUrl('https://example.com/hook', false).hostname).toBe('example.com');
     expect(assertSafeUrl('http://127.0.0.1:4000', true).port).toBe('4000');
+  });
+});
+
+describe('SSRF-safe agent (checked at connect time, after DNS resolution)', () => {
+  it('refuses a hostname that resolves to a private address, allows it when explicitly enabled', async () => {
+    const server = createServer((_req, res) => res.end('internal')).listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const url = `http://localhost:${(server.address() as AddressInfo).port}/`; // name, not IP: exercises the DNS hook
+    try {
+      const blocked = await fetch(url, { dispatcher: createSafeAgent(false) }).catch((e: Error & { cause?: Error }) => e.cause ?? e);
+      expect(String((blocked as Error).message)).toMatch(/Refusing to connect to private address/);
+      const allowed = await fetch(url, { dispatcher: createSafeAgent(true) });
+      expect(await allowed.text()).toBe('internal');
+    } finally {
+      server.close();
+    }
   });
 });

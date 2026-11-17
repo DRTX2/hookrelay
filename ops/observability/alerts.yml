@@ -1,0 +1,31 @@
+# Same alerts exist as CloudWatch alarms in infra/terraform (alarms.tf). Keep both in sync.
+groups:
+  - name: hookrelay
+    rules:
+      - alert: DeliveryFailureRateHigh
+        expr: |
+          sum(rate(hookrelay_delivery_attempts_total{outcome=~"retry|exhausted|gone"}[10m]))
+            / clamp_min(sum(rate(hookrelay_delivery_attempts_total{outcome!="skipped"}[10m])), 1e-9) > 0.25
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: 'More than 25% of delivery attempts are failing', runbook: 'docs/RUNBOOK.md#failure-rate' }
+      - alert: QueueBacklogGrowing
+        expr: max(hookrelay_queue_jobs{state="waiting"}) > 5000
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: 'Delivery queue backlog above 5k jobs: scale workers', runbook: 'docs/RUNBOOK.md#backlog' }
+      - alert: ApiErrorRateHigh
+        expr: sum(rate(hookrelay_http_request_duration_seconds_count{status=~"5.."}[5m])) / clamp_min(sum(rate(hookrelay_http_request_duration_seconds_count[5m])), 1e-9) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: 'API 5xx above 2%', runbook: 'docs/RUNBOOK.md#api-errors' }
+      - alert: IngestLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(hookrelay_http_request_duration_seconds_bucket{route="/v1/messages",method="POST"}[5m]))) > 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: 'p95 ingestion latency above 300ms (SLO)', runbook: 'docs/RUNBOOK.md#latency' }
+      - alert: NoWorkers
+        expr: absent(up{job="worker"} == 1)
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: 'No delivery worker is up: events are queuing but nothing is sent', runbook: 'docs/RUNBOOK.md#no-workers' }

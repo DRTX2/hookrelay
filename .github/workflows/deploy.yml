@@ -1,0 +1,64 @@
+name: Deploy
+
+# Build once, push to ECR, roll out with Terraform. Production waits for a manual approval
+# (GitHub Environment "production" with required reviewers).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # never cancel a rollout half way
+
+permissions:
+  id-token: write # GitHub OIDC -> AWS role: no long-lived AWS keys stored anywhere
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  images:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_ECR_ROLE_ARN }}', aws-region: '${{ env.AWS_REGION }}' } # push-only role
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push (immutable tags)
+        run: |
+          for app in api web; do
+            image="${{ steps.ecr.outputs.registry }}/hookrelay-$app:${{ steps.tag.outputs.tag }}"
+            docker build -f apps/$app/Dockerfile -t "$image" .
+            docker push "$image"
+          done
+
+  production:
+    needs: images
+    runs-on: ubuntu-latest
+    environment: production
+    defaults: { run: { working-directory: infra/terraform } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.13.x }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: '${{ env.AWS_REGION }}' }
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform plan -input=false -var-file=envs/production.tfvars -var image_tag=${{ needs.images.outputs.tag }} -out=tfplan
+      - run: terraform apply -input=false tfplan
+      - name: Wait for ECS services to stabilize (rolls back automatically via the circuit breaker otherwise)
+        run: |
+          aws ecs wait services-stable --cluster hookrelay-production \
+            --services hookrelay-production-api hookrelay-production-worker hookrelay-production-web
+      - name: Smoke test
+        run: curl -fsS "$(terraform output -raw url)/health"

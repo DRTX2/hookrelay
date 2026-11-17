@@ -3,11 +3,11 @@ import {
   Post, Sse, UseGuards, type MessageEvent,
 } from '@nestjs/common';
 import { interval, map, merge, type Observable } from 'rxjs';
-import { z } from 'zod';
 import { PG, type Db } from '../db/db.js';
 import { AdminGuard, ApiKeyGuard, hashKey, newApiKey, Tenant, Zod } from '../common/http.js';
 import { EventsService } from '../common/events.js';
-import { DeliveryQueue } from '../delivery/delivery.queue.js';
+import { CreateApp } from '../contracts.js';
+import { DeliveryQueue } from '../delivery/infrastructure/delivery.queue.js';
 
 @Controller('v1')
 export class DeliveriesController {
@@ -36,7 +36,7 @@ export class DeliveriesController {
       if (!exists.rowCount) throw new NotFoundException();
       throw new ConflictException('Only failed deliveries can be retried');
     }
-    await this.queue.enqueue([{ deliveryId: id, attempt: rows[0].attempt_count + 1, manual: true }]);
+    await this.queue.schedule([{ deliveryId: id, attempt: rows[0].attempt_count + 1, manual: true }]);
     return { id, status: 'pending' };
   }
 
@@ -89,7 +89,7 @@ export class DeliveriesController {
   /** Creates a tenant and returns its API key exactly once. */
   @Post('apps')
   @UseGuards(AdminGuard)
-  async createApp(@Body(new Zod(z.object({ name: z.string().min(1).max(100) }))) body: { name: string }) {
+  async createApp(@Body(new Zod(CreateApp)) body: { name: string }) {
     const apiKey = newApiKey();
     const { rows } = await this.db.query(
       'INSERT INTO apps (name, api_key_hash) VALUES ($1, $2) RETURNING id, name, created_at AS "createdAt"',

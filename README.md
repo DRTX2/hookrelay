@@ -1,117 +1,112 @@
 # Hookrelay
 
-**Reliable webhook delivery as a service.** Your app sends one event; Hookrelay fans it out to every subscribed endpoint, signs each request, retries with backoff, protects your network from SSRF, and gives you a dashboard to inspect and replay every attempt.
+**Reliable webhook delivery as a service.** Your product sends one event; Hookrelay fans it out to every subscribed endpoint, signs each request, retries with backoff, blocks SSRF, and gives you a dashboard to inspect and replay every attempt.
 
-Sending webhooks looks like `fetch(url, { body })` until production: receivers go down, time out, return 500s for hours, or point at `169.254.169.254`. Hookrelay is the infrastructure layer that makes that boring (in the spirit of Svix or Hookdeck).
+`fetch(url, { body })` works fine until production: receivers go down for hours, time out, return 500s, or point at `169.254.169.254`. Hookrelay is the infrastructure layer that handles all of that (in the spirit of Svix or Hookdeck), built as a production-shaped reference system: hexagonal core, tests at three levels, observability, CI/CD, and AWS infrastructure as code.
 
-![overview](docs/overview.png)
+![Delivery timeline: two 503s, then success](docs/message.png)
 
-## Architecture
+| | |
+|---|---|
+| **Stack** | Node.js 24 · TypeScript · NestJS 12 · BullMQ 6 · PostgreSQL 17 · Redis 8 · Next.js 16 / React 19 · zod 4 |
+| **Quality** | Vitest (unit + black-box integration) · k6 · ESLint · SonarQube · CodeQL · Trivy · gitleaks |
+| **Ops** | OpenTelemetry · Prometheus · Grafana · Jaeger · Docker · GitHub Actions (OIDC) · Terraform · AWS ECS Fargate, RDS, ElastiCache |
+
+## What it guarantees
+
+- **No lost events.** The message and its deliveries commit in one Postgres transaction. If the enqueue fails afterwards, a sweeper re-enqueues anything `pending` with no job. Deterministic job IDs make that safe on any number of replicas.
+- **At-least-once delivery** with a stable `webhook-id` so receivers can dedupe.
+- **Idempotent ingestion**: the same `Idempotency-Key` returns the original message, even under concurrent requests.
+- **Retries with jitter** (Standard Webhooks schedule: 5 s → 10 h), a **circuit breaker** that disables endpoints after consecutive failures or `410 Gone`, and **manual resend**.
+- **Security by default**: Standard Webhooks HMAC signatures (checked against the official test vector), an SSRF guard enforced at *connect time* after DNS resolution (so DNS rebinding can't get around it), hashed API keys, per-tenant rate limits, and OWASP API Top 10 mapping.
+
+## Measured
+
+k6, 2 workers × 50 concurrency delivering at the same time, everything on one laptop (i7-13650HX):
+
+| Ingestion rate | p50 | p95 | Errors |
+|---|---|---|---|
+| 200 req/s (2 min) | 2.4 ms | **3.9 ms** | 0 % |
+| 400 req/s | 1.7 ms | **3.1 ms** | 0 % |
+| 800 req/s (saturates at ~740) | 1.9 ms | 635 ms | 0 % |
+
+The SLO is p95 < 300 ms for ingestion. One API instance holds ~400 req/s with large headroom. See [SCALABILITY](docs/SCALABILITY.md) for the bottleneck analysis and what changes at 10×.
+
+## Architecture in one picture
 
 ```mermaid
 flowchart LR
-  P[Your service] -- "POST /v1/messages<br/>Idempotency-Key" --> API
+  P[Producer] -- "POST /v1/messages" --> API
   subgraph Hookrelay
     API[NestJS API] -- "1 tx: message + deliveries" --> PG[(PostgreSQL)]
-    API -- "2 enqueue (after COMMIT)" --> R[(Redis / BullMQ)]
-    R --> W1[Worker] & W2[Worker]
-    W1 & W2 -- "attempts, status" --> PG
-    W1 & W2 -- "pub/sub events" --> R
-    SW[Sweeper] -. "re-enqueue orphans" .-> R
-    API -- "SSE" --> WEB[Next.js dashboard<br/>BFF]
+    API -- "2 enqueue after COMMIT" --> R[(Redis / BullMQ)]
+    R --> W[Workers ×N]
+    W -- "attempt + state + circuit (1 statement)" --> PG
+    W -- "pub/sub" --> R
+    API -- SSE --> WEB[Next.js BFF dashboard]
   end
-  W1 & W2 -- "signed POST<br/>SSRF-safe agent" --> E1[Endpoint A] & E2[Endpoint B]
+  W -- "signed POST, SSRF-safe" --> E[Customer endpoints]
 ```
 
-| Process | Responsibility |
-|---|---|
-| `api` (NestJS) | Auth, validation, idempotent ingestion, fan-out, query endpoints, SSE |
-| `worker` (NestJS app context, N replicas) | HTTP delivery, retries, circuit breaker, orphan sweeper |
-| `web` (Next.js 16) | Dashboard. A BFF: the API key stays on the server, the browser only sees Next routes |
-
-The API and workers are separate processes on purpose: a receiver that hangs for 15 s must never slow down ingestion.
-
-## Delivery guarantees
-
-- **At-least-once.** Every attempt is persisted before the next one is scheduled. Receivers dedupe on `webhook-id`, which stays the same across retries.
-- **No lost events when Redis or a process dies.** The message and its deliveries are committed in one Postgres transaction. Enqueueing happens after COMMIT; if it fails, the **sweeper** finds `pending` rows with no job and re-enqueues them. Job IDs are deterministic (`delivery_attempt`), so the sweeper and workers can race safely on any number of replicas.
-- **Idempotent ingestion.** The same `Idempotency-Key` returns the original message (`200`) and creates no new deliveries, even under concurrent requests (unique index + `ON CONFLICT`).
-- **Retries with jitter.** The default schedule follows the Standard Webhooks recommendation (5 s, 5 m, 30 m, 2 h, 5 h, 10 h, 10 h) with ±20 % jitter so a recovering endpoint is not hit by a thundering herd. Configurable via `RETRY_SCHEDULE`.
-- **Circuit breaker.** After `ENDPOINT_DISABLE_AFTER` consecutive failed attempts, or an immediate `410 Gone`, the endpoint is disabled and stops receiving new deliveries until someone re-enables it.
-- **Postgres is the source of truth.** BullMQ only carries "attempt N of delivery X is due". Each retry is a new delayed job, so the attempt count never lives in two places.
-
-## Security
-
-- **Signatures**: [Standard Webhooks](https://www.standardwebhooks.com) HMAC-SHA256 (`webhook-id`, `webhook-timestamp`, `webhook-signature`), verified against the official spec test vector. A 5-minute timestamp tolerance blocks replays, and receivers accept multiple signatures for secret rotation.
-- **SSRF protection**: customers choose the target URL, so every connection goes through an undici `Agent` whose DNS `lookup` rejects loopback, RFC1918, link-local (cloud metadata), CGNAT, multicast and IPv4-mapped IPv6 addresses. Checking inside the connect step, not before `fetch`, closes the DNS-rebinding window. Redirects are not followed.
-- **API keys** are random 192-bit tokens stored only as SHA-256. Admin token comparison is constant-time.
-- **Tenant isolation**: every query is scoped by the `app_id` resolved from the key.
+The delivery core is hexagonal: `DeliverAttempt` (the use case) depends only on ports, and Postgres, undici, BullMQ and Redis are adapters. Details in [ARCHITECTURE](docs/ARCHITECTURE.md).
 
 ## Run it
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres redis api worker receiver
-
-# create a tenant (returns the API key once)
+docker compose up -d                       # postgres, redis, api, 2 workers, web, demo receiver
 curl -s -XPOST localhost:3000/v1/apps -H 'x-admin-token: change-me' \
-  -H 'content-type: application/json' -d '{"name":"demo"}'
+  -H 'content-type: application/json' -d '{"name":"demo"}'      # -> { apiKey: "hr_..." }
+HOOKRELAY_API_KEY=hr_... docker compose up -d web                # dashboard on :3001
 
-# start the dashboard with that key
-HOOKRELAY_API_KEY=hr_... docker compose up -d web   # http://localhost:3001
-```
-
-The `receiver` service is a reference consumer that verifies signatures with plain `node:crypto` and fails 30 % of requests on purpose so you can watch retries happen. Register `http://receiver:4000/hooks` as an endpoint and set `WEBHOOK_SECRET` to its secret.
-
-Local dev without Docker for the apps: `pnpm i`, then `pnpm dev:api`, `pnpm dev:worker`, `pnpm dev:web`.
-
-## API
-
-All routes take `Authorization: Bearer hr_...`.
-
-| Method | Route | |
-|---|---|---|
-| `POST` | `/v1/messages` | `{ eventType, payload }`, optional `Idempotency-Key`. `202` new, `200` duplicate |
-| `GET` | `/v1/messages?limit&before&eventType` | Cursor-paginated, with per-message delivery status |
-| `GET` | `/v1/messages/:id` | Payload, deliveries and the full attempt timeline |
-| `GET/POST` | `/v1/endpoints` | List with 24 h health / create (returns the signing secret) |
-| `POST` | `/v1/endpoints/:id/enable` · `/disable` | Manual circuit control |
-| `POST` | `/v1/deliveries/:id/retry` | Resend a failed delivery (one attempt) |
-| `GET` | `/v1/stats` | Success rate, p50/p95 latency, hourly series |
-| `GET` | `/v1/stream` | Server-Sent Events: live delivery attempts |
-
-Payload envelope sent to receivers: `{ "type": "order.created", "timestamp": "...", "data": { ... } }`.
-
-## Verifying a webhook (receiver side)
-
-```js
-import { createHmac, timingSafeEqual } from 'node:crypto';
-
-function verify(secret, headers, rawBody) {
-  const id = headers['webhook-id'], ts = headers['webhook-timestamp'];
-  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
-  const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
-  const expected = 'v1,' + createHmac('sha256', key).update(`${id}.${ts}.${rawBody}`).digest('base64');
-  return headers['webhook-signature'].split(' ')
-    .some((s) => s.length === expected.length && timingSafeEqual(Buffer.from(s), Buffer.from(expected)));
-}
+# API reference (OpenAPI 3.1 generated from the zod contracts): http://localhost:3000/docs
+# Observability: OTEL_SDK_DISABLED=false docker compose --profile observability up -d
+#   Grafana :3002 · Prometheus :9090 · Jaeger :16686
 ```
 
 ## Tests
 
 ```bash
-pnpm test   # signing (spec vector), backoff/jitter, retry decision table, SSRF ranges + URL rules
+pnpm --filter api test        # 36 unit tests: domain, use case with fakes, SSRF guard (core coverage gate 90%)
+pnpm --filter api test:int    # 8 black-box tests: real API + worker processes, Postgres, Redis, receiver
+k6 run -e API=... -e KEY=... ops/load/ingest.js
 ```
 
-Ingestion, idempotency, retries, manual resend, circuit breaker, SSE and the Docker stack were verified end to end against real Postgres and Redis.
+## Documentation
 
-## Stack
+| Doc | What's inside |
+|---|---|
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Context, containers, hexagonal core, sequences, data model |
+| [ADRs](docs/adr) | Why Postgres is the source of truth, separate workers, connect-time SSRF, ECS over Lambda/EKS… |
+| [IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md) | Phases, what's done, what's next |
+| [TEST_PLAN](docs/TEST_PLAN.md) | Test pyramid, cases, coverage policy, load testing |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | AWS + Terraform + CI/CD, first deploy, rollbacks, cost estimate |
+| [OBSERVABILITY](docs/OBSERVABILITY.md) | Logs, metrics, traces, SLOs, alerts, dashboards |
+| [SECURITY](docs/SECURITY.md) | Threat model, OWASP API Top 10 mapping, accepted risks |
+| [SCALABILITY](docs/SCALABILITY.md) | Load results, bottlenecks, scaling plan |
+| [RUNBOOK](docs/RUNBOOK.md) | What to do when each alert fires |
+| [ROADMAP](docs/ROADMAP.md) | Prioritized backlog of pending work |
+| [CONTEXT](docs/CONTEXT.md) | Project memory: decisions, gotchas, how to resume work |
+| [AGENTS.md](AGENTS.md) | Conventions for AI coding agents (spec-driven workflow) |
 
-NestJS 12 (ESM) · BullMQ 6 · PostgreSQL 17 (raw SQL, forward-only migrations behind an advisory lock) · Redis 8 · undici · zod · Next.js 16 (App Router, Server Actions, BFF) · Vitest · Docker Compose
+## Repository layout
 
-## Trade-offs and next steps
+```
+apps/api/src
+  delivery/domain           pure rules: retry policy, signatures
+  delivery/application      DeliverAttempt use case + ports
+  delivery/infrastructure   Postgres store, undici sender + SSRF guard, BullMQ, sweeper
+  messages|endpoints|deliveries   HTTP controllers (thin, SQL-first)
+  contracts.ts              zod schemas -> validation + OpenAPI
+apps/web                    Next.js 16 dashboard (BFF: API key never reaches the browser)
+examples/receiver           reference consumer that verifies signatures
+infra/terraform             AWS: VPC, ECS Fargate, ALB, RDS, ElastiCache, Secrets Manager, alarms, OIDC roles
+ops/observability           Prometheus rules, Grafana dashboard, Jaeger
+ops/load                    k6 scenarios
+.github/workflows           CI, CodeQL, deploy
+docs/                       everything above
+```
 
-- Endpoints match exact event types. Wildcards (`order.*`) are the obvious next feature.
-- No per-endpoint rate limiting yet. A slow receiver can use up worker concurrency (bounded by the 15 s timeout).
-- Attempts are kept forever. Production needs a retention job, or partitioning `attempts` by month.
-- Single-key BFF dashboard. Multi-user login would sit in front of it.
+## License
+
+MIT. Built by [David Manjarres](https://drtx2.github.io/portfolio/).

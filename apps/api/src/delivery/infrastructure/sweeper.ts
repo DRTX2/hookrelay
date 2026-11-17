@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
-import { PG, type Db } from '../db/db.js';
+import { PG, type Db } from '../../db/db.js';
 import { DeliveryQueue } from './delivery.queue.js';
 
 const EVERY_MS = 60_000;
@@ -27,7 +27,7 @@ export class Sweeper implements OnApplicationBootstrap, OnModuleDestroy {
         ORDER BY updated_at LIMIT 500`,
     );
     if (rows.length) {
-      await this.queue.enqueue(rows.map((r) => ({ deliveryId: r.id, attempt: r.attempt_count + 1 })));
+      await this.queue.schedule(rows.map((r) => ({ deliveryId: r.id, attempt: r.attempt_count + 1 })));
       this.log.warn(`Re-enqueued ${rows.length} orphaned deliveries`);
     }
     return rows.length;

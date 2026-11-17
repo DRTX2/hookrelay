@@ -2,18 +2,10 @@ import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { filter, Observable, share } from 'rxjs';
 import { required } from '../db/db.js';
+import type { DeliveryEvent, DeliveryEventPublisher } from '../delivery/application/ports.js';
 
-export interface DeliveryEvent {
-  appId: string;
-  deliveryId: string;
-  messageId: string;
-  endpointId: string;
-  status: 'pending' | 'succeeded' | 'failed';
-  attemptNo: number;
-  statusCode: number | null;
-  durationMs: number;
-  at: string;
-}
+export type { DeliveryEvent };
+
 
 const CHANNEL = 'hookrelay:delivery-events';
 
@@ -22,7 +14,7 @@ const CHANNEL = 'hookrelay:delivery-events';
  * the API is scaled horizontally; it is fire-and-forget, the database stays the source of truth.
  */
 @Injectable()
-export class EventsService implements OnModuleDestroy {
+export class EventsService implements DeliveryEventPublisher, OnModuleDestroy {
   private pub?: Redis;
   private sub?: Redis;
   private stream$?: Observable<DeliveryEvent>;
