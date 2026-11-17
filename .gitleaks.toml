@@ -1,0 +1,11 @@
+# Only documented placeholders and the public Standard Webhooks test vector are allowed.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public test vector and documentation placeholders (not real credentials)"
+regexes = [
+  '''whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw''', # official Standard Webhooks spec vector
+  '''change-me''',
+  '''hr_\.\.\.''',
+]
