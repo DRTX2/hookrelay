@@ -8,6 +8,11 @@ COPY apps/web apps/web
 RUN pnpm --filter web build
 
 FROM node:24-alpine
+# Runtime hardening: patch OS packages and drop package managers the app never uses at runtime
+# (npm bundles its own dependencies, which is where most base-image CVEs live).
+RUN apk upgrade --no-cache \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx \
+    /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 COPY --from=build /repo/apps/web/.next/standalone ./
