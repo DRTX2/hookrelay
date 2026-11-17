@@ -104,6 +104,8 @@ Every retry is a **new delayed job** with a deterministic ID, so the database ho
 
 ### Recovery (sweeper)
 
+**Dead letters.** Deliveries that exhaust the schedule stay `failed` and form the DLQ (`GET /v1/dead-letters`). `POST /v1/dead-letters/replay` claims them atomically (`UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)`) and schedules one manual attempt each. Concurrent replays can't double-send.
+
 Every 60 s each worker selects `pending` deliveries whose due time passed more than 2 minutes ago and re-enqueues them. Because job IDs are `deliveryId_attempt`, re-adding a job that's still queued does nothing. This covers crashes between COMMIT and enqueue, Redis outages and flushed queues.
 
 ## 5. Data model

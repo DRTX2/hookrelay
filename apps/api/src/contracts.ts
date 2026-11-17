@@ -25,6 +25,22 @@ export const CreateEndpoint = z.object({
 
 export const CreateApp = z.object({ name: z.string().min(1).max(100) });
 
+/** Dead-letter queue: deliveries that exhausted their retries (status = failed). */
+export const ListDeadLettersQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  before: z.iso.datetime({ offset: true }).optional().describe('Cursor: updatedAt of the last item of the previous page'),
+  endpointId: z.uuid().optional(),
+});
+
+export const ReplayDeadLetters = z.object({
+  endpointId: z.uuid().optional().describe('Only this endpoint (typical after a customer fixes an outage)'),
+  since: z.iso.datetime({ offset: true }).optional().describe('Only deliveries that failed at or after this instant'),
+  until: z.iso.datetime({ offset: true }).optional(),
+  limit: z.number().int().min(1).max(1000).default(500).describe('Upper bound per call; call again to continue'),
+});
+
 export type CreateMessage = z.infer<typeof CreateMessage>;
 export type ListMessagesQuery = z.infer<typeof ListMessagesQuery>;
 export type CreateEndpoint = z.infer<typeof CreateEndpoint>;
+export type ListDeadLettersQuery = z.infer<typeof ListDeadLettersQuery>;
+export type ReplayDeadLetters = z.infer<typeof ReplayDeadLetters>;

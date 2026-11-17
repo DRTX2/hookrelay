@@ -153,6 +153,28 @@ describe('Hookrelay API (black box)', () => {
     await eventually(() => call('GET', `/v1/messages/${msg.body.id}`), (r) => r.body.deliveries[0]?.status === 'succeeded');
   });
 
+  it('collects exhausted deliveries in the DLQ and replays them exactly once, even with concurrent replays', async () => {
+    responses.set('/outage', Array(50).fill(503));
+    const ep = await call('POST', '/v1/endpoints', { url: `${receiverUrl}/outage`, eventTypes: ['order.refunded'] });
+    for (let i = 0; i < 3; i++) await call('POST', '/v1/messages', { eventType: 'order.refunded', payload: { i } });
+    const dlq = await eventually(() => call('GET', `/v1/dead-letters?endpointId=${ep.body.id}`), (r) => r.body.total === 3);
+    expect(dlq.body.data[0]).toMatchObject({ endpointUrl: `${receiverUrl}/outage`, eventType: 'order.refunded' });
+
+    // Customer fixes their endpoint; two operators hit "replay" at the same time.
+    responses.set('/outage', []);
+    await call('POST', `/v1/endpoints/${ep.body.id}/enable`);
+    const before = received.filter((r) => r.path === '/outage' && r.body).length;
+    const [a, b] = await Promise.all([
+      call('POST', '/v1/dead-letters/replay', { endpointId: ep.body.id }),
+      call('POST', '/v1/dead-letters/replay', { endpointId: ep.body.id }),
+    ]);
+    expect(a.body.replayed + b.body.replayed).toBe(3);
+    await eventually(() => call('GET', `/v1/dead-letters?endpointId=${ep.body.id}`), (r) => r.body.total === 0);
+    await sleep(1500);
+    const successes = received.filter((r) => r.path === '/outage').length - before;
+    expect(successes).toBe(3); // no duplicate sends
+  });
+
   it('exposes Prometheus metrics from the worker', async () => {
     const text = await (await fetch(METRICS)).text();
     expect(text).toMatch(/hookrelay_delivery_attempts_total\{outcome="success"\} \d+/);

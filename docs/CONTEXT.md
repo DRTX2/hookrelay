@@ -9,7 +9,7 @@ Hookrelay accepts events from a producer, fans them out to subscribed customer e
 | Area | State |
 |---|---|
 | Features | Complete for v1 (see IMPLEMENTATION_PLAN phases 1–3) |
-| Tests | 36 unit (core 98.7% lines) + 8 black-box integration, all green |
+| Tests | 36 unit (core 98.7% lines) + 9 black-box integration, all green |
 | Lint/types | ESLint + `tsc --strict` clean |
 | Security scans | Trivy clean (3 accepted risks documented), workflows pass actionlint |
 | Observability | Verified locally: Prometheus (all replicas), Grafana dashboard, Jaeger traces |
@@ -59,3 +59,4 @@ docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy:0.66.0 fs --scanners vuln
 
 ## Log
 - **2026-11-16**: v1 built (engine, dashboard, receiver). Hexagonal refactor of delivery. Added metrics, JSON logs, OTel, rate limiting, helmet, OpenAPI from zod, integration suite, k6, Grafana/Prometheus/Jaeger, CI/CodeQL/deploy workflows, Terraform for AWS, docs. Next: ROADMAP "Now".
+- **2026-11-16 (later)**: DLQ endpoints (`GET /v1/dead-letters`, `POST /v1/dead-letters/replay`, atomic claim with SKIP LOCKED) + dashboard page. Flagship now publishes `flag.*` events here (optional).

@@ -5,7 +5,7 @@
 ```
             ┌─────────────┐   k6 load (ops/load) — capacity, SLO
             │   load      │
-          ┌─┴─────────────┴─┐   8 black-box tests — real API + worker processes,
+          ┌─┴─────────────┴─┐   9 black-box tests — real API + worker processes,
           │  integration    │   Postgres, Redis, programmable receiver
         ┌─┴─────────────────┴─┐   36 unit tests — domain, use case with fakes,
         │        unit         │   SSRF agent (incl. real DNS resolution)
@@ -54,6 +54,7 @@ Signed request verifiable by a receiver · stable `webhook-id` · success resets
 | I6 | Circuit + resend | 3 failures disable the endpoint. Re-enable + resend succeeds |
 | I7 | Metrics | Worker exposes attempt counters and queue gauges |
 | I8 | Rate limit | 429 with `retry-after` once the tenant exceeds its window |
+| I9 | DLQ + bulk replay | Exhausted deliveries listed in `/v1/dead-letters`. Two **concurrent** replays deliver each exactly once (`FOR UPDATE SKIP LOCKED`) |
 
 ### Load (`ops/load/ingest.js`)
 Constant arrival rate on `POST /v1/messages` with idempotency keys, while workers deliver at the same time. Thresholds: error rate < 1%, p95 < 300 ms. Results and analysis in [SCALABILITY](SCALABILITY.md).

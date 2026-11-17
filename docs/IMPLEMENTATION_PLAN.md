@@ -10,6 +10,7 @@ Status legend: ✅ done and verified · 🟡 partially done · ⬜ not started. 
 | Idempotent ingestion + fan-out in one transaction | ✅ | `messages.controller.ts`, integration "is idempotent" |
 | Worker: signed delivery, retries with jitter, 410 handling | ✅ | `DeliverAttempt`, 9 use-case unit tests |
 | Circuit breaker, manual resend | ✅ | integration "opens the circuit…" |
+| Dead-letter queue + atomic bulk replay (API + dashboard page) | ✅ | integration "collects exhausted deliveries in the DLQ…" |
 | Orphan sweeper (crash/Redis-loss recovery) | ✅ | `sweeper.ts` (see TEST_PLAN gap G2) |
 | SSRF guard at connect time | ✅ | `ssrf.ts`, unit tests incl. DNS-resolved localhost |
 

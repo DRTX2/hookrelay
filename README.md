@@ -17,7 +17,7 @@
 - **No lost events.** The message and its deliveries commit in one Postgres transaction. If the enqueue fails afterwards, a sweeper re-enqueues anything `pending` with no job. Deterministic job IDs make that safe on any number of replicas.
 - **At-least-once delivery** with a stable `webhook-id` so receivers can dedupe.
 - **Idempotent ingestion**: the same `Idempotency-Key` returns the original message, even under concurrent requests.
-- **Retries with jitter** (Standard Webhooks schedule: 5 s → 10 h), a **circuit breaker** that disables endpoints after consecutive failures or `410 Gone`, and **manual resend**.
+- **Retries with jitter** (Standard Webhooks schedule: 5 s → 10 h), a **circuit breaker** that disables endpoints after consecutive failures or `410 Gone`, a **dead-letter queue** with **bulk replay** (by endpoint or time window, safe under concurrent replays) and single resend.
 - **Security by default**: Standard Webhooks HMAC signatures (checked against the official test vector), an SSRF guard enforced at *connect time* after DNS resolution (so DNS rebinding can't get around it), hashed API keys, per-tenant rate limits, and OWASP API Top 10 mapping.
 
 ## Measured
@@ -68,7 +68,7 @@ HOOKRELAY_API_KEY=hr_... docker compose up -d web                # dashboard on 
 
 ```bash
 pnpm --filter api test        # 36 unit tests: domain, use case with fakes, SSRF guard (core coverage gate 90%)
-pnpm --filter api test:int    # 8 black-box tests: real API + worker processes, Postgres, Redis, receiver
+pnpm --filter api test:int    # 9 black-box tests: real API + worker processes, Postgres, Redis, receiver
 k6 run -e API=... -e KEY=... ops/load/ingest.js
 ```
 
@@ -87,6 +87,7 @@ k6 run -e API=... -e KEY=... ops/load/ingest.js
 | [RUNBOOK](docs/RUNBOOK.md) | What to do when each alert fires |
 | [ROADMAP](docs/ROADMAP.md) | Prioritized backlog of pending work |
 | [CONTEXT](docs/CONTEXT.md) | Project memory: decisions, gotchas, how to resume work |
+| Ecosystem | [Flagship](https://github.com/DRTX2/flagship) publishes its flag changes through Hookrelay (optional, idempotent). Details in Flagship's `docs/ECOSYSTEM.md` |
 | [AGENTS.md](AGENTS.md) | Conventions for AI coding agents (spec-driven workflow) |
 
 ## Repository layout

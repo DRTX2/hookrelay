@@ -28,7 +28,7 @@ Effort: S < 1 day · M 1–3 days · L > 3 days. "Why" explains the value to a u
 | 13 | Multi-user dashboard auth (OIDC) with roles | L | Today the dashboard uses one tenant key on the server |
 | 14 | Response schemas in OpenAPI + generated TS client SDK | M | Typed integrations for producers |
 | 15 | Event type catalog with JSON Schema per type and payload validation | M | Producers can't send malformed events |
-| 16 | Dead-letter view + bulk replay by filter/time range | M | Recover after a customer outage in one action |
+| 16 | ~~Dead-letter view + bulk replay~~ **done**. Next: replay with the full retry schedule instead of one attempt | S | Recover after a customer outage in one action |
 | 17 | Transformations (filter/map payload per endpoint) | L | Svix/Hookdeck parity |
 | 18 | WAF, verify-full TLS to RDS, KMS envelope encryption of secrets | M | Security hardening list in SECURITY.md |
 | 19 | SQS as the trigger queue (behind `RetryScheduler`) | M | Removes Redis from the critical path at very high scale |

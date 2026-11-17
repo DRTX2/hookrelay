@@ -51,3 +51,7 @@ export interface MessageDetail {
   id: string; eventType: string; payload: unknown; idempotencyKey: string | null; createdAt: string;
   deliveries: { id: string; status: Status; attemptCount: number; nextAttemptAt: string | null; lastError: string | null; endpointId: string; endpointUrl: string; attempts: Attempt[] }[];
 }
+export interface DeadLetter {
+  id: string; attemptCount: number; lastError: string | null; failedAt: string;
+  messageId: string; eventType: string; endpointId: string; endpointUrl: string;
+}

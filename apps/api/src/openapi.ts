@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CreateApp, CreateEndpoint, CreateMessage, ListMessagesQuery } from './contracts.js';
+import { CreateApp, CreateEndpoint, CreateMessage, ListDeadLettersQuery, ListMessagesQuery, ReplayDeadLetters } from './contracts.js';
 
 /** OpenAPI 3.1 built from the same zod schemas the controllers validate with. */
 const body = (schema: z.ZodType) => ({
@@ -55,6 +55,12 @@ export const openApiDocument = {
     '/v1/endpoints/{id}/disable': { post: { summary: 'Disable manually', security: tenant, parameters: [uuidParam('id')], responses: { 204: ok('Disabled'), ...errors } } },
     '/v1/deliveries/{id}/retry': {
       post: { summary: 'Resend a failed delivery (one attempt)', security: tenant, parameters: [uuidParam('id')], responses: { 202: ok('Scheduled'), 409: ok('Delivery is not failed'), ...errors } },
+    },
+    '/v1/dead-letters': {
+      get: { summary: 'Dead-letter queue: deliveries that exhausted their retries', security: tenant, parameters: queryParams(ListDeadLettersQuery), responses: { 200: ok('Page of failed deliveries + total'), ...errors } },
+    },
+    '/v1/dead-letters/replay': {
+      post: { summary: 'Bulk replay from the DLQ (filters: endpoint, time window)', security: tenant, requestBody: body(ReplayDeadLetters), responses: { 202: ok('{ replayed: n }'), ...errors } },
     },
     '/v1/stats': { get: { summary: 'Success rate, latency percentiles, hourly series (24h)', security: tenant, responses: { 200: ok('Stats'), ...errors } } },
     '/v1/stream': { get: { summary: 'Server-Sent Events: live delivery attempts', security: tenant, responses: { 200: ok('text/event-stream'), ...errors } } },

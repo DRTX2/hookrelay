@@ -1,12 +1,12 @@
 import {
   Body, ConflictException, Controller, Get, HttpCode, Inject, NotFoundException, Param, ParseUUIDPipe,
-  Post, Sse, UseGuards, type MessageEvent,
+  Post, Query, Sse, UseGuards, type MessageEvent,
 } from '@nestjs/common';
 import { interval, map, merge, type Observable } from 'rxjs';
 import { PG, type Db } from '../db/db.js';
 import { AdminGuard, ApiKeyGuard, hashKey, newApiKey, Tenant, Zod } from '../common/http.js';
 import { EventsService } from '../common/events.js';
-import { CreateApp } from '../contracts.js';
+import { CreateApp, ListDeadLettersQuery, ReplayDeadLetters } from '../contracts.js';
 import { DeliveryQueue } from '../delivery/infrastructure/delivery.queue.js';
 
 @Controller('v1')
@@ -38,6 +38,57 @@ export class DeliveriesController {
     }
     await this.queue.schedule([{ deliveryId: id, attempt: rows[0].attempt_count + 1, manual: true }]);
     return { id, status: 'pending' };
+  }
+
+  /** Dead-letter queue: failed deliveries, newest first, with enough context to decide on a replay. */
+  @Get('dead-letters')
+  @UseGuards(ApiKeyGuard)
+  async deadLetters(@Tenant() appId: string, @Query(new Zod(ListDeadLettersQuery)) q: ListDeadLettersQuery) {
+    const { rows } = await this.db.query(
+      `SELECT d.id, d.attempt_count AS "attemptCount", d.last_error AS "lastError", d.updated_at AS "failedAt",
+              m.id AS "messageId", m.event_type AS "eventType", e.id AS "endpointId", e.url AS "endpointUrl"
+         FROM deliveries d
+         JOIN endpoints e ON e.id = d.endpoint_id
+         JOIN messages m ON m.id = d.message_id
+        WHERE e.app_id=$1 AND d.status='failed'
+          AND ($2::uuid IS NULL OR e.id=$2) AND ($3::timestamptz IS NULL OR d.updated_at < $3)
+        ORDER BY d.updated_at DESC LIMIT $4`,
+      [appId, q.endpointId ?? null, q.before ?? null, q.limit],
+    );
+    const total = await this.db.query(
+      `SELECT count(*)::int AS n FROM deliveries d JOIN endpoints e ON e.id=d.endpoint_id
+        WHERE e.app_id=$1 AND d.status='failed' AND ($2::uuid IS NULL OR e.id=$2)`,
+      [appId, q.endpointId ?? null],
+    );
+    return { data: rows, total: total.rows[0].n, nextCursor: rows.length === q.limit ? rows.at(-1).failedAt : null };
+  }
+
+  /**
+   * Bulk replay from the dead-letter queue (e.g. after a customer fixes their endpoint).
+   * Atomic claim: rows flip failed -> pending in one statement, so two concurrent replays can't double-send.
+   * Each replayed delivery gets one manual attempt; if it fails again it returns to the DLQ.
+   */
+  @Post('dead-letters/replay')
+  @UseGuards(ApiKeyGuard)
+  @HttpCode(202)
+  async replay(@Tenant() appId: string, @Body(new Zod(ReplayDeadLetters)) body: ReplayDeadLetters) {
+    const { rows } = await this.db.query(
+      `UPDATE deliveries d SET status='pending', next_attempt_at=now(), updated_at=now()
+        WHERE d.id IN (
+          SELECT d2.id FROM deliveries d2 JOIN endpoints e ON e.id = d2.endpoint_id
+           WHERE e.app_id=$1 AND d2.status='failed' AND e.disabled_at IS NULL
+             AND ($2::uuid IS NULL OR e.id=$2)
+             AND ($3::timestamptz IS NULL OR d2.updated_at >= $3)
+             AND ($4::timestamptz IS NULL OR d2.updated_at <= $4)
+           ORDER BY d2.updated_at LIMIT $5
+           FOR UPDATE OF d2 SKIP LOCKED)
+       RETURNING d.id, d.attempt_count`,
+      [appId, body.endpointId ?? null, body.since ?? null, body.until ?? null, body.limit],
+    );
+    if (rows.length) {
+      await this.queue.schedule(rows.map((r) => ({ deliveryId: r.id, attempt: r.attempt_count + 1, manual: true })));
+    }
+    return { replayed: rows.length };
   }
 
   @Get('stats')

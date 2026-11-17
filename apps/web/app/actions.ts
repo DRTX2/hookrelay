@@ -58,3 +58,8 @@ export async function retryDelivery(id: string) {
   await api(`/v1/deliveries/${id}/retry`, { method: 'POST' });
   refresh();
 }
+
+export async function replayDeadLetters(endpointId?: string) {
+  await api('/v1/dead-letters/replay', { method: 'POST', body: JSON.stringify(endpointId ? { endpointId } : {}) });
+  refresh();
+}
