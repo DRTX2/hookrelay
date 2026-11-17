@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - examples/*
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - msgpackr-extract
+  - sharp
+  - unrs-resolver

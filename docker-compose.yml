@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: hookrelay, POSTGRES_PASSWORD: hookrelay, POSTGRES_DB: hookrelay }
+    ports: ["5432:5432"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "hookrelay"], interval: 2s, retries: 20 }
+  redis:
+    image: redis:8-alpine
+    ports: ["6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, retries: 20 }
+
+  api: &api
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment: &env
+      DATABASE_URL: postgres://hookrelay:hookrelay@postgres:5432/hookrelay
+      REDIS_URL: redis://redis:6379
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+      ALLOW_PRIVATE_TARGETS: "true" # demo only: lets endpoints target the receiver container
+      RETRY_SCHEDULE: ${RETRY_SCHEDULE:-5,15,60,300,1800}
+    ports: ["3000:3000"]
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+  worker:
+    <<: *api
+    command: ["node", "dist/worker.js"]
+    ports: []
+    deploy: { replicas: 2 }
+
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    environment:
+      HOOKRELAY_API_URL: http://api:3000
+      HOOKRELAY_API_KEY: ${HOOKRELAY_API_KEY:-}
+    ports: ["3001:3000"]
+    depends_on: [api]
+
+  receiver:
+    image: node:24-alpine
+    working_dir: /app
+    volumes: ["./examples/receiver:/app:ro"]
+    command: ["node", "server.js"]
+    environment: { WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}", FAIL_RATE: "0.3" }
+    ports: ["4000:4000"]
