@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Logger } from '@nestjs/common';
 import pg from 'pg';
 
 export const PG = Symbol('PG');
@@ -10,7 +11,7 @@ export function createPool(): Db {
   // An idle client that loses its connection (database restart, failover) emits 'error' on the pool.
   // Unhandled, that event kills the process: found by the Atalaya orders-flagship-db-down game day.
   // pg already discards the broken client; the next query opens a new connection.
-  pool.on('error', (e) => console.warn(JSON.stringify({ level: 'warn', msg: 'idle database connection lost', error: e.message })));
+  pool.on('error', (e) => new Logger('Database').warn(`idle database connection lost: ${e.message}`));
   return pool;
 }
 

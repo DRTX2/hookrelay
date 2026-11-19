@@ -85,14 +85,14 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
       - name: Dependency + IaC scan (Trivy filesystem)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with: { scan-type: fs, scanners: 'vuln,secret,misconfig', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
       - name: Build images
         run: |
           docker build -f apps/api/Dockerfile -t hookrelay-api:ci .
           docker build -f apps/web/Dockerfile -t hookrelay-web:ci .
       - name: Image scan (Trivy)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with: { image-ref: 'hookrelay-api:ci', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
 
   terraform:
