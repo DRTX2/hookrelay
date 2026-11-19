@@ -6,7 +6,12 @@ export const PG = Symbol('PG');
 export type Db = pg.Pool;
 
 export function createPool(): Db {
-  return new pg.Pool({ connectionString: required('DATABASE_URL'), max: 10 });
+  const pool = new pg.Pool({ connectionString: required('DATABASE_URL'), max: 10 });
+  // An idle client that loses its connection (database restart, failover) emits 'error' on the pool.
+  // Unhandled, that event kills the process: found by the Atalaya orders-flagship-db-down game day.
+  // pg already discards the broken client; the next query opens a new connection.
+  pool.on('error', (e) => console.warn(JSON.stringify({ level: 'warn', msg: 'idle database connection lost', error: e.message })));
+  return pool;
 }
 
 export function required(name: string): string {

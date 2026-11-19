@@ -101,6 +101,23 @@ afterAll(async () => {
 });
 
 describe('Hookrelay API (black box)', () => {
+  it('survives the database dropping every connection (failover): API and worker stay up and recover', async () => {
+    // Concurrent writes leave several idle clients in the API's pool: those are what a failover breaks.
+    await Promise.all(Array.from({ length: 6 }, (_, i) => fetch(`${API}/v1/apps`, { method: 'POST', headers: { 'x-admin-token': ADMIN, 'content-type': 'application/json' }, body: JSON.stringify({ name: `warm-${i}` }) })));
+    const before = procs.map((p) => p.exitCode);
+    const c = new pg.Client({ connectionString: DATABASE_URL });
+    await c.connect();
+    await c.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()`);
+    await c.end();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(procs.map((p) => p.exitCode)).toEqual(before); // neither the API nor the worker crashed
+    const created = await eventually(
+      () => fetch(`${API}/v1/apps`, { method: 'POST', headers: { 'x-admin-token': ADMIN, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'after-failover' }) }).then((r) => r.status).catch(() => 0),
+      (s) => s === 201 || s === 200,
+    );
+    expect([200, 201]).toContain(created);
+  });
+
   it('creates a tenant with an admin token and rejects bad credentials', async () => {
     const denied = await fetch(`${API}/v1/apps`, { method: 'POST', headers: { 'x-admin-token': 'nope', 'content-type': 'application/json' }, body: '{"name":"x"}' });
     expect(denied.status).toBe(401);

@@ -16,10 +16,13 @@ locals {
   api_image = "${aws_ecr_repository.app["api"].repository_url}:${var.image_tag}"
   web_image = "${aws_ecr_repository.app["web"].repository_url}:${var.image_tag}"
 
-  app_secrets = [for k in ["DATABASE_URL", "REDIS_URL", "ADMIN_TOKEN"] : {
+  app_secrets = concat([for k in ["DATABASE_URL", "REDIS_URL", "ADMIN_TOKEN"] : {
     name      = k
     valueFrom = "${aws_secretsmanager_secret.app.arn}:${k}::"
-  }]
+    }], var.integration_secret_arn == "" ? [] : [{ # verifies Nimbus' signed inbound incidents
+    name      = "NIMBUS_WEBHOOK_SECRET"
+    valueFrom = "${var.integration_secret_arn}:NIMBUS_WEBHOOK_SECRET::"
+  }])
   common_env = [
     { name = "NODE_ENV", value = "production" },
     { name = "LOG_FORMAT", value = "json" },

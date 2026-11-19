@@ -26,7 +26,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.app.arn, aws_secretsmanager_secret.web_api_key.arn]
+      Resource = compact([aws_secretsmanager_secret.app.arn, aws_secretsmanager_secret.web_api_key.arn, var.integration_secret_arn])
     }]
   })
 }

@@ -47,12 +47,14 @@ API: `GET /metrics` (not routed by the ALB). Worker: `:9464/metrics` (`METRICS_P
 ## Traces (OpenTelemetry)
 Zero-code auto-instrumentation, enabled by environment:
 ```
-NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
+NODE_OPTIONS=--import @opentelemetry/auto-instrumentations-node/register   # --import: the app is ESM
 OTEL_SERVICE_NAME=hookrelay-api | hookrelay-worker
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
 OTEL_NODE_ENABLED_INSTRUMENTATIONS=http,express,pg,ioredis,undici
 OTEL_SDK_DISABLED=false
 ```
+The trace crosses the queue: `schedule()` stores the active W3C context in the BullMQ job (`trace`), and the worker runs each attempt in a `hookrelay.deliver` span under it. The outgoing webhook carries `traceparent`, so a receiver that traces (Bitácora does) continues the publisher's trace. Retries are scheduled from inside the attempt's span and stay in the same trace.
+
 An ingestion trace shows the API key lookup, `BEGIN`, message insert, deliveries insert and `COMMIT` (≈6 ms total):
 
 ![Jaeger trace](img/jaeger.png)

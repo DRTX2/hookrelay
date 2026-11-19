@@ -11,6 +11,8 @@ export interface DeliveryJob {
   deliveryId: string;
   attempt: number;
   manual?: boolean;
+  /** W3C trace context of whoever scheduled the attempt, so the delivery continues the caller's trace. */
+  trace?: Record<string, string>;
 }
 
 export interface DeliveryContext {

@@ -24,12 +24,12 @@ export function verifyNimbusSignature(secret: string, header: string | undefined
   });
 }
 
-const NimbusIncident = z.looseObject({ incidentId: z.string().min(1).max(100), event: z.enum(['opened', 'recovered']) });
+const NimbusIncident = z.looseObject({ incidentId: z.string().min(1).max(100), event: z.enum(['opened', 'recovered', 'escalated']) });
 
 /**
  * Atalaya integration: Nimbus incident workflows post here (Nimbus HTTP steps cannot carry an API
  * key, so the request is authenticated by its HMAC signature instead). The incident becomes a normal
- * Hookrelay message (`incident.opened` / `incident.recovered`) and gets signed delivery, retries,
+ * Hookrelay message (`incident.opened` / `incident.recovered` / `incident.escalated`) and gets signed delivery, retries,
  * DLQ and replay for free. Idempotent per incident + event, so Nimbus' at-least-once retries are safe.
  */
 @Controller('v1/inbound/nimbus')

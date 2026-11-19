@@ -70,3 +70,9 @@ variable "alarm_email" {
   type    = string
   default = ""
 }
+
+variable "integration_secret_arn" {
+  type        = string
+  default     = ""
+  description = "Optional Atalaya integration: Secrets Manager secret (JSON) with NIMBUS_WEBHOOK_SECRET. Empty = standalone."
+}
